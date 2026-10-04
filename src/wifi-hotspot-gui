@@ -245,7 +245,10 @@ class Win(Adw.ApplicationWindow):
             title="Data cap per session (GB, 0 = none)", digits=1,
             adjustment=Gtk.Adjustment(lower=0, upper=1000, step_increment=0.5, value=0))
         self.ntf = Adw.SwitchRow(title="Notify when devices join or leave", active=True)
-        for w in (self.iso, self.acl, self.idle, self.cap, self.ntf):
+        self.spi = Adw.SwitchRow(title="Show panel icon",
+                                 subtitle="Persistent hotspot icon in the top panel / icon tray.",
+                                 active=True)
+        for w in (self.iso, self.acl, self.idle, self.cap, self.ntf, self.spi):
             g.add(w)
         save = Gtk.Button(label="Save", halign=Gtk.Align.END, margin_top=12)
         save.add_css_class("suggested-action")
@@ -422,6 +425,7 @@ class Win(Adw.ApplicationWindow):
         self.idle.set_value(to_int(kv.get("IDLE_MIN")))
         self.cap.set_value(to_int(kv.get("CAP_MB")) / 1024)
         self.ntf.set_active(kv.get("NOTIFY", "1") != "0")
+        self.spi.set_active(kv.get("SHOW_PANEL_ICON", "1") != "0")
         self.sync_state()
 
     def on_save(self, *_):
@@ -439,7 +443,8 @@ class Win(Adw.ApplicationWindow):
                 flag(self.iso), flag(self.acl),
                 str(int(self.idle.get_value())),
                 str(int(round(self.cap.get_value() * 1024))),
-                flag(self.ntf)]
+                flag(self.ntf),
+                flag(self.spi)]
 
         def done(res):
             if self.report(res, "Saved"):

@@ -17,7 +17,7 @@ ME=$(basename "$0")
 
 # ---------- first-run setup (root only, so read-only commands work unprivileged)
 init_files() {
-  [ -f $CONF ] || printf 'SSID=%s-Hotspot\nMAXCLIENTS=8\nRATE=\nSECURITY=wpa2\n' "$(hostname -s)" > $CONF
+  [ -f $CONF ] || printf 'SSID=%s-Hotspot\nMAXCLIENTS=8\nRATE=\nSECURITY=wpa2\nSHOW_PANEL_ICON=1\n' "$(hostname -s)" > $CONF
   if [ ! -s $SECRET ]; then   # migrate an old PASS= line out of the conf, else generate a random password
     local old; old=$(grep -m1 '^PASS=' $CONF | cut -d= -f2-)
     [ -n "$old" ] || old=$(tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c 14)
@@ -395,17 +395,17 @@ case "${1:-}" in
          echo "SECURITY=${CFG[SECURITY]:-wpa2}"; echo "CHANNEL=$(iw dev "$STA" info 2>/dev/null | awk '/channel/{print $2; exit}')"
          echo "INTERFACE=$STA"
          echo "ISOLATE=${CFG[ISOLATE]:-0}"; echo "ALLOWLIST=${CFG[ALLOWLIST]:-0}"; echo "IDLE_MIN=${CFG[IDLE_MIN]:-0}"
-         echo "CAP_MB=${CFG[CAP_MB]:-0}"; echo "NOTIFY=${CFG[NOTIFY]:-1}"; echo "ALLOWED=$(paste -sd, $ALLOW)"
+         echo "CAP_MB=${CFG[CAP_MB]:-0}"; echo "NOTIFY=${CFG[NOTIFY]:-1}"; echo "SHOW_PANEL_ICON=${CFG[SHOW_PANEL_ICON]:-1}"; echo "ALLOWED=$(paste -sd, $ALLOW)"
          isup && [ -r $STATUS ] && grep '^TOTAL_BYTES=' $STATUS ;;
   secret) getpass ;;
-  apply) # wifi-hotspot apply SSID MAXCLIENTS RATE SECURITY ISOLATE ALLOWLIST IDLE_MIN CAP_MB NOTIFY ; new password (optional) on stdin
-         ssid=${2:-}; max=${3:-}; rate=${4:-}; sec=${5:-}; iso=${6:-}; acl=${7:-}; idle=${8:-}; cap=${9:-}; ntf=${10:-}
+  apply) # wifi-hotspot apply SSID MAXCLIENTS RATE SECURITY ISOLATE ALLOWLIST IDLE_MIN CAP_MB NOTIFY SHOW_PANEL_ICON ; new password (optional) on stdin
+         ssid=${2:-}; max=${3:-}; rate=${4:-}; sec=${5:-}; iso=${6:-}; acl=${7:-}; idle=${8:-}; cap=${9:-}; ntf=${10:-}; spi=${11:-1}
          IFS= read -r pw || pw=""
          [ -n "$ssid" ] && [ "$(printf %s "$ssid" | wc -c)" -le 32 ] || { echo "bad network name (1-32 bytes)"; exit 1; }
          [[ $max =~ ^[0-9]+$ ]] && [ "$max" -ge 1 ] && [ "$max" -le 32 ] || { echo "max devices must be 1-32"; exit 1; }
          [[ $rate =~ ^[0-9]*$ ]] || { echo "bad rate"; exit 1; }
          [[ $sec =~ ^(wpa2|wpa2wpa3|wpa3)$ ]] || { echo "bad security mode"; exit 1; }
-         [[ $iso =~ ^[01]$ ]] && [[ $acl =~ ^[01]$ ]] && [[ $ntf =~ ^[01]$ ]] || { echo "bad on/off value"; exit 1; }
+         [[ $iso =~ ^[01]$ ]] && [[ $acl =~ ^[01]$ ]] && [[ $ntf =~ ^[01]$ ]] && [[ $spi =~ ^[01]$ ]] || { echo "bad on/off value"; exit 1; }
          [[ $idle =~ ^[0-9]+$ ]] && [ "$idle" -le 1440 ] || { echo "idle minutes must be 0-1440"; exit 1; }
          [[ $cap =~ ^[0-9]+$ ]] && [ "$cap" -le 1048576 ] || { echo "bad data cap"; exit 1; }
          [ -z "$pw" ] || validpw "$pw" || { echo "password: 8-63 chars, no | character"; exit 1; }
@@ -416,7 +416,7 @@ case "${1:-}" in
            done
          fi
          setkv SSID "$ssid"; setkv MAXCLIENTS "$max"; setkv RATE "$rate"; setkv SECURITY "$sec"
-         setkv ISOLATE "$iso"; setkv ALLOWLIST "$acl"; setkv IDLE_MIN "$idle"; setkv CAP_MB "$cap"; setkv NOTIFY "$ntf"
+         setkv ISOLATE "$iso"; setkv ALLOWLIST "$acl"; setkv IDLE_MIN "$idle"; setkv CAP_MB "$cap"; setkv NOTIFY "$ntf"; setkv SHOW_PANEL_ICON "$spi"
          [ -z "$pw" ] || setpass "$pw"
          if isup; then stop; start; fi ;;
   *) echo "usage: $ME start|stop|restart|ssid X|pass X|max N|rate Mbps|security M|block MAC|unblock MAC|allow MAC|disallow MAC|limit MAC DOWN UP|clients|blocked|show|secret|apply|init|watch" ;;

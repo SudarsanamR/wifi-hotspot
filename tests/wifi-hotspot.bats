@@ -52,54 +52,54 @@ teardown() { hs_teardown; }
 # ---------- apply (GUI Save path)
 
 @test "apply writes every setting and takes the password from stdin" {
-  run hs apply "My Net" 5 20 wpa2wpa3 1 0 15 500 0 <<< "new-password!"
+  run hs apply "My Net" 5 20 wpa2wpa3 1 0 15 500 0 1 <<< "new-password!"
   [ "$status" -eq 0 ]
   [ "$(conf SSID)" = "My Net" ]; [ "$(conf MAXCLIENTS)" = 5 ]; [ "$(conf RATE)" = 20 ]
   [ "$(conf SECURITY)" = wpa2wpa3 ]; [ "$(conf ISOLATE)" = 1 ]; [ "$(conf ALLOWLIST)" = 0 ]
-  [ "$(conf IDLE_MIN)" = 15 ]; [ "$(conf CAP_MB)" = 500 ]; [ "$(conf NOTIFY)" = 0 ]
+  [ "$(conf IDLE_MIN)" = 15 ]; [ "$(conf CAP_MB)" = 500 ]; [ "$(conf NOTIFY)" = 0 ]; [ "$(conf SHOW_PANEL_ICON)" = 1 ]
   [ "$(hs secret)" = "new-password!" ]
   [ "$(stat -c %a "$T/etc/hotspot.secret")" = 600 ]
 }
 
 @test "apply with empty stdin keeps the current password" {
   old=$(hs secret)
-  hs apply Net 8 "" wpa2 0 0 0 0 1 < /dev/null
+  hs apply Net 8 "" wpa2 0 0 0 0 1 1 < /dev/null
   [ "$(hs secret)" = "$old" ]
 }
 
 @test "apply accepts QR-unfriendly characters in the password" {
-  hs apply Net 8 "" wpa2 0 0 0 0 1 <<< 'a;b:c"d,e f\g'
+  hs apply Net 8 "" wpa2 0 0 0 0 1 1 <<< 'a;b:c"d,e f\g'
   [ "$(hs secret)" = 'a;b:c"d,e f\g' ]
 }
 
 @test "apply rejects bad input and leaves the config untouched" {
   before=$(cat "$T/etc/hotspot.conf" "$T/etc/hotspot.secret")
   bad=(
-    '""        8 "" wpa2 0 0 0 0 1'
-    '"$(printf %033d 0)" 8 "" wpa2 0 0 0 0 1'
-    'Net 0     "" wpa2 0 0 0 0 1'
-    'Net 33    "" wpa2 0 0 0 0 1'
-    'Net 8     x  wpa2 0 0 0 0 1'
-    'Net 8     "" wep  0 0 0 0 1'
-    'Net 8     "" wpa2 2 0 0 0 1'
-    'Net 8     "" wpa2 0 0 1441 0 1'
-    'Net 8     "" wpa2 0 0 0 -1 1'
+    '""        8 "" wpa2 0 0 0 0 1 1'
+    '"$(printf %033d 0)" 8 "" wpa2 0 0 0 0 1 1'
+    'Net 0     "" wpa2 0 0 0 0 1 1'
+    'Net 33    "" wpa2 0 0 0 0 1 1'
+    'Net 8     x  wpa2 0 0 0 0 1 1'
+    'Net 8     "" wep  0 0 0 0 1 1'
+    'Net 8     "" wpa2 2 0 0 0 1 1'
+    'Net 8     "" wpa2 0 0 1441 0 1 1'
+    'Net 8     "" wpa2 0 0 0 -1 1 1'
   )
   for a in "${bad[@]}"; do
     eval "run hs apply $a < /dev/null"
     [ "$status" -eq 1 ] || { echo "accepted: $a"; return 1; }
   done
   for pw in short 'has|pipe' "$(printf %064d 0)"; do
-    run hs apply Net 8 "" wpa2 0 0 0 0 1 <<< "$pw"
+    run hs apply Net 8 "" wpa2 0 0 0 0 1 1 <<< "$pw"
     [ "$status" -eq 1 ] || { echo "accepted password: $pw"; return 1; }
   done
   [ "$(cat "$T/etc/hotspot.conf" "$T/etc/hotspot.secret")" = "$before" ]
 }
 
 @test "SSID length is counted in bytes, not characters" {
-  run hs apply "$(printf 'é%.0s' {1..16})" 8 "" wpa2 0 0 0 0 1 < /dev/null   # 32 bytes
+  run hs apply "$(printf 'é%.0s' {1..16})" 8 "" wpa2 0 0 0 0 1 1 < /dev/null   # 32 bytes
   [ "$status" -eq 0 ]
-  run hs apply "$(printf 'é%.0s' {1..17})" 8 "" wpa2 0 0 0 0 1 < /dev/null   # 34 bytes
+  run hs apply "$(printf 'é%.0s' {1..17})" 8 "" wpa2 0 0 0 0 1 1 < /dev/null   # 34 bytes
   [ "$status" -eq 1 ]
 }
 
@@ -198,7 +198,7 @@ teardown() { hs_teardown; }
 @test "security modes map to the documented hostapd settings" {
   for m in "wpa2|WPA-PSK|0" "wpa2wpa3|WPA-PSK SAE|1" "wpa3|SAE|2"; do
     IFS='|' read -r sec km pmf <<< "$m"
-    hs apply Net 8 "" "$sec" 0 0 0 0 1 <<< "goodpassword"
+    hs apply Net 8 "" "$sec" 0 0 0 0 1 1 <<< "goodpassword"
     hs start
     c="$T/run/hotspot-hostapd.conf"
     grep -qx "wpa_key_mgmt=$km" "$c"; grep -qx "ieee80211w=$pmf" "$c"

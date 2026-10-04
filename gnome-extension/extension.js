@@ -12,6 +12,9 @@
  * State sync: polls /run/hotspot-status (written by backend watcher)
  *             and falls back to `iw dev` if file is missing.
  *
+ * The panel tray button visibility is controlled by SHOW_PANEL_ICON
+ * in /etc/hotspot.conf (default: 1 = visible).
+ *
  * Supported: GNOME Shell 45 – 50 (ESM, QuickSettings, PanelMenu)
  */
 
@@ -28,10 +31,11 @@ import * as QuickSettings from 'resource:///org/gnome/shell/ui/quickSettings.js'
 
 const BIN = '/usr/local/sbin/wifi-hotspot';
 const STATUS_FILE = '/run/hotspot-status';
+const CONF_FILE = '/etc/hotspot.conf';
 const POLL_SECONDS = 3;
 
-// Classic WiFi wave icon
-const ICON_NAME = 'network-wireless-symbolic';
+// Hotspot-specific icon (available in Adwaita and Yaru)
+const ICON_NAME = 'network-wireless-hotspot-symbolic';
 
 // ──────────────────────────────────────────────
 // Run a command asynchronously, return a Promise
@@ -99,6 +103,26 @@ function readStatusFile() {
     } catch (_e) {
         return null; // file doesn't exist = hotspot is off
     }
+}
+
+// ──────────────────────────────────────────────
+// Read SHOW_PANEL_ICON from /etc/hotspot.conf
+// ──────────────────────────────────────────────
+function readShowPanelIcon() {
+    try {
+        const [ok, contents] = GLib.file_get_contents(CONF_FILE);
+        if (!ok) return true;
+
+        const text = new TextDecoder().decode(contents);
+        for (const line of text.split('\n')) {
+            if (line.startsWith('SHOW_PANEL_ICON=')) {
+                return line.split('=')[1]?.trim() !== '0';
+            }
+        }
+    } catch (_e) {
+        // conf doesn't exist or unreadable: default to visible
+    }
+    return true;
 }
 
 // ──────────────────────────────────────────────
@@ -278,15 +302,21 @@ class HotspotQuickIndicator extends QuickSettings.SystemIndicator {
 // ──────────────────────────────────────────────
 export default class WifiHotspotExtension extends Extension {
     enable() {
-        // 1. Add tray button to top panel status area ("icon tray")
-        this._trayButton = new HotspotPanelButton(this);
-        Main.panel.addToStatusArea(this.uuid, this._trayButton);
+        this._showPanel = readShowPanelIcon();
+
+        // 1. Add tray button to top panel status area ("icon tray") – if enabled
+        if (this._showPanel) {
+            this._trayButton = new HotspotPanelButton(this);
+            Main.panel.addToStatusArea(this.uuid, this._trayButton);
+        } else {
+            this._trayButton = null;
+        }
 
         // 2. Add Quick Settings toggle
         this._quickIndicator = new HotspotQuickIndicator(this);
         Main.panel.statusArea.quickSettings.addExternalIndicator(this._quickIndicator);
 
-        // State polling
+        // State polling (also re-reads config for SHOW_PANEL_ICON changes)
         this._pollId = GLib.timeout_add_seconds(
             GLib.PRIORITY_DEFAULT,
             POLL_SECONDS,
@@ -297,6 +327,19 @@ export default class WifiHotspotExtension extends Extension {
     }
 
     async syncAll() {
+        // Check if the user toggled "Show panel icon" in the config
+        const wantPanel = readShowPanelIcon();
+        if (wantPanel !== this._showPanel) {
+            this._showPanel = wantPanel;
+            if (wantPanel && !this._trayButton) {
+                this._trayButton = new HotspotPanelButton(this);
+                Main.panel.addToStatusArea(this.uuid, this._trayButton);
+            } else if (!wantPanel && this._trayButton) {
+                this._trayButton.destroy();
+                this._trayButton = null;
+            }
+        }
+
         const status = readStatusFile();
         if (status) {
             this._trayButton?.updateState(true, status.clients, status);
