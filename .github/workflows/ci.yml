@@ -32,7 +32,9 @@ jobs:
           ruff check --select E9,F src/wifi-hotspot-gui
 
       - name: PolicyKit XML lint
-        run: xmllint --noout data/local.sudar.hotspot.policy
+        run: |
+          sudo apt-get install -y libxml2-utils
+          xmllint --noout data/local.sudar.hotspot.policy
 
   test:
     runs-on: ubuntu-latest
