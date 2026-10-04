@@ -72,9 +72,26 @@ EXT_DIR="$USER_HOME/.local/share/gnome-shell/extensions/$EXT_UUID"
 install -d -o "$USER_NAME" -g "$(id -g "$USER_NAME")" "$EXT_DIR"
 install -m 644 -o "$USER_NAME" -g "$(id -g "$USER_NAME")" gnome-extension/metadata.json "$EXT_DIR/"
 install -m 644 -o "$USER_NAME" -g "$(id -g "$USER_NAME")" gnome-extension/extension.js "$EXT_DIR/"
-# Enable the extension (non-fatal: works only under a GNOME session)
-runuser -u "$USER_NAME" -- gnome-extensions enable "$EXT_UUID" 2>/dev/null \
-  || echo "NOTE: could not auto-enable the Quick Settings toggle. Run:  gnome-extensions enable $EXT_UUID"
+# Enable the extension (non-fatal: works only under a GNOME session).
+# Try gnome-extensions first, then fall back to gsettings (works without D-Bus session).
+if ! runuser -u "$USER_NAME" -- gnome-extensions enable "$EXT_UUID" 2>/dev/null; then
+  DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$USER_NAME")/bus" \
+    runuser -u "$USER_NAME" -- gsettings get org.gnome.shell enabled-extensions 2>/dev/null | {
+      read -r current
+      if echo "$current" | grep -q "$EXT_UUID"; then
+        : # already listed
+      elif [ "$current" = "@as []" ] || [ -z "$current" ]; then
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$USER_NAME")/bus" \
+          runuser -u "$USER_NAME" -- gsettings set org.gnome.shell enabled-extensions "['$EXT_UUID']" 2>/dev/null || true
+      else
+        new=$(echo "$current" | sed "s/]$/, '$EXT_UUID']/")
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$USER_NAME")/bus" \
+          runuser -u "$USER_NAME" -- gsettings set org.gnome.shell enabled-extensions "$new" 2>/dev/null || true
+      fi
+    }
+  echo "NOTE: could not auto-enable via gnome-extensions CLI; used gsettings fallback."
+  echo "      Log out and back in to activate the Quick Settings toggle."
+fi
 
 echo
 echo "Installed. Open 'Wi-Fi Hotspot' from the app grid, or run:  wifi-hotspot-gui"
