@@ -20,7 +20,7 @@ init_files() {
   [ -f $CONF ] || printf 'SSID=%s-Hotspot\nMAXCLIENTS=8\nRATE=\nSECURITY=wpa2\n' "$(hostname -s)" > $CONF
   if [ ! -s $SECRET ]; then   # migrate an old PASS= line out of the conf, else generate a random password
     local old; old=$(grep -m1 '^PASS=' $CONF | cut -d= -f2-)
-    [ -n "$old" ] || old=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 14)
+    [ -n "$old" ] || old=$(tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c 14)
     printf 'PASS=%s\n' "$old" > $SECRET
   fi
   if grep -q '^PASS=' $CONF; then grep -v '^PASS=' $CONF > $CONF.tmp; mv $CONF.tmp $CONF; fi
