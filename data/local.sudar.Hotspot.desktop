@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Wi-Fi Hotspot
+Comment=Share your Wi-Fi connection while staying connected to it
+Exec=/usr/local/bin/wifi-hotspot-gui
+Icon=network-wireless
+Terminal=false
+Categories=Network;Settings;GTK;
+Keywords=hotspot;wifi-hotspot;wifi;tethering;ap;
+StartupWMClass=local.sudar.Hotspot

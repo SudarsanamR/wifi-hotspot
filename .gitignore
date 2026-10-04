@@ -1,0 +1,17 @@
+# Build artifacts
+*hotspot-*.tar.gz
+SHA256SUMS
+__pycache__/
+*.pyc
+.ruff_cache/
+
+# Editor
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

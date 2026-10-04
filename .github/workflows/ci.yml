@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ShellCheck
+        run: |
+          sudo apt-get install -y shellcheck
+          shellcheck -S warning src/wifi-hotspot install.sh uninstall.sh
+
+      - name: Bash syntax check
+        run: |
+          bash -n src/wifi-hotspot
+          bash -n install.sh
+          bash -n uninstall.sh
+
+      - name: Python compile check
+        run: python3 -m py_compile src/wifi-hotspot-gui
+
+      - name: Python lint (ruff)
+        run: |
+          pip install ruff
+          ruff check --select E9,F src/wifi-hotspot-gui
+
+      - name: PolicyKit XML lint
+        run: xmllint --noout data/local.sudar.hotspot.policy
+
+  test:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats
+
+      # all system tools (iw, iptables, tc, hostapd...) are stubbed by tests/test_helper.bash
+      - name: Run tests
+        run: bats tests/
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # keep the src/ + data/ layout: install.sh reads its files from there
+      - name: Build tarball
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          D="wifi-hotspot-${VERSION}"
+          mkdir -p "$D/src" "$D/data" "$D/gnome-extension"
+          cp src/wifi-hotspot src/wifi-hotspot-gui "$D/src/"
+          cp data/local.sudar.hotspot.policy data/local.sudar.Hotspot.desktop data/90-hotspot-ap0.conf "$D/data/"
+          cp gnome-extension/metadata.json gnome-extension/extension.js "$D/gnome-extension/"
+          cp install.sh uninstall.sh LICENSE README.md CHANGELOG.md "$D/"
+          # every file install.sh installs must be in the bundle
+          for f in $(grep -oE '(src|data|gnome-extension)/[A-Za-z0-9._-]+' install.sh | sort -u); do
+            [ -f "$D/$f" ] || { echo "missing from tarball: $f"; exit 1; }
+          done
+          tar czf "$D.tar.gz" "$D"
+          sha256sum "$D.tar.gz" > SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            wifi-hotspot-*.tar.gz
+            SHA256SUMS
+          prerelease: true
+          generate_release_notes: true

@@ -1,0 +1,424 @@
+#!/bin/bash
+# wifi-hotspot: Wi-Fi hotspot manager (hostapd + dnsmasq + iptables + tc)
+#
+# Files:  /etc/hotspot.conf    settings, world-readable, NO password in it
+#         /etc/hotspot.secret  Wi-Fi password, root only
+#         /run/hotspot-status  live snapshot written by the watch loop, world-readable
+#                              (the GUI reads this directly, so it needs no root for polling)
+# Optional conf keys: STA=<wifi iface>  COUNTRY=<2-letter code>  SUBNET=<a.b.c>  (all auto-detected if absent)
+umask 077
+export LC_ALL=C
+set -u
+CONF=/etc/hotspot.conf; SECRET=/etc/hotspot.secret
+DENY=/etc/hotspot.deny; ALLOW=/etc/hotspot.allow; LIMITS=/etc/hotspot.limits
+STATUS=/run/hotspot-status; STATE=/run/hotspot.state; LEASES=/run/hotspot-dnsmasq.leases
+AP=ap0; FIRST=10; LAST=50
+ME=$(basename "$0")
+
+# ---------- first-run setup (root only, so read-only commands work unprivileged)
+init_files() {
+  [ -f $CONF ] || printf 'SSID=%s-Hotspot\nMAXCLIENTS=8\nRATE=\nSECURITY=wpa2\n' "$(hostname -s)" > $CONF
+  if [ ! -s $SECRET ]; then   # migrate an old PASS= line out of the conf, else generate a random password
+    local old; old=$(grep -m1 '^PASS=' $CONF | cut -d= -f2-)
+    [ -n "$old" ] || old=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 14)
+    printf 'PASS=%s\n' "$old" > $SECRET
+  fi
+  if grep -q '^PASS=' $CONF; then grep -v '^PASS=' $CONF > $CONF.tmp; mv $CONF.tmp $CONF; fi
+  touch $DENY $ALLOW $LIMITS
+  chmod 644 $CONF $DENY $ALLOW $LIMITS; chmod 600 $SECRET
+}
+[ "$(id -u)" = 0 ] && init_files
+
+declare -A CFG
+load_conf() {   # read the whole conf once into CFG[] (no forks)
+  local k v; CFG=()
+  [ -r $CONF ] || return 0
+  while IFS='=' read -r k v; do [ -n "$k" ] && CFG[$k]=$v; done < $CONF
+  return 0
+}
+load_conf
+
+setkv() { [[ $2 == *$'\n'* ]] && { echo bad value; exit 1; }
+  { grep -v "^$1=" $CONF; echo "$1=$2"; } > $CONF.tmp && chmod 644 $CONF.tmp && mv $CONF.tmp $CONF; }
+getpass() { grep -m1 '^PASS=' $SECRET | cut -d= -f2-; }
+setpass() { [[ $1 == *$'\n'* ]] && { echo bad value; exit 1; }
+  printf 'PASS=%s\n' "$1" > $SECRET.tmp && chmod 600 $SECRET.tmp && mv $SECRET.tmp $SECRET; }
+validpw() { [ ${#1} -ge 8 ] && [ ${#1} -le 63 ] && [[ $1 != *'|'* ]] && [[ $1 != *$'\n'* ]]; }
+ismac() { [[ $1 =~ ^([0-9a-f]{2}:){5}[0-9a-f]{2}$ ]]; }
+isup() { [ -d /sys/class/net/$AP ]; }
+stations() { iw dev $AP station dump 2>/dev/null | awk '/^Station/{print $2}'; }
+need_root() { [ "$(id -u)" = 0 ] || { echo "run as root (sudo $ME $1 ...)"; exit 1; }; }
+
+# ---------- interface detection (no hardcoded wlp3s0 / phy0)
+detect_sta() {   # first managed Wi-Fi interface that is connected; falls back to any managed one
+  local i first=
+  while read -r i; do
+    [ "$i" = "$AP" ] && continue
+    iw dev "$i" info 2>/dev/null | grep -q 'type managed' || continue
+    [ -n "$first" ] || first=$i
+    if iw dev "$i" info | grep -q channel; then echo "$i"; return; fi
+  done < <(iw dev 2>/dev/null | awk '$1=="Interface"{print $2}')
+  echo "$first"
+}
+get_sta() { STA=${CFG[STA]:-}; [ -n "$STA" ] || STA=$(detect_sta); }
+
+# ---------- firewall: everything lives in our own chains, so cleanup is exact and idempotent
+rules_off() {
+  local d
+  acct_off
+  while iptables -D FORWARD -j HS_FWD 2>/dev/null; do :; done
+  iptables -F HS_FWD 2>/dev/null; iptables -X HS_FWD 2>/dev/null
+  while iptables -t nat -D POSTROUTING -j HS_NAT 2>/dev/null; do :; done
+  iptables -t nat -F HS_NAT 2>/dev/null; iptables -t nat -X HS_NAT 2>/dev/null
+  while iptables -D INPUT -j HS_IN 2>/dev/null; do :; done
+  iptables -F HS_IN 2>/dev/null; iptables -X HS_IN 2>/dev/null
+  return 0
+}
+rules_on() {
+  # let clients reach DHCP and DNS on this machine even when INPUT is default-drop (ufw, firewalld...)
+  iptables -N HS_IN && iptables -I INPUT 1 -j HS_IN &&
+  iptables -A HS_IN -i $AP -p udp --dport 67 -j ACCEPT &&
+  iptables -A HS_IN -i $AP -p udp --dport 53 -j ACCEPT &&
+  iptables -A HS_IN -i $AP -p tcp --dport 53 -j ACCEPT &&
+  iptables -N HS_FWD && iptables -I FORWARD 1 -j HS_FWD &&
+  iptables -A HS_FWD -i $AP -o "$STA" -j ACCEPT &&
+  iptables -A HS_FWD -i "$STA" -o $AP -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT &&
+  iptables -t nat -N HS_NAT && iptables -t nat -I POSTROUTING 1 -j HS_NAT &&
+  iptables -t nat -A HS_NAT -s $NET.0/24 -o "$STA" -j MASQUERADE
+}
+
+# per-device byte counters: one counting rule per DHCP address, reset on every start
+acct_off() {
+  local d
+  for d in -i -o; do while iptables -D FORWARD $d $AP -j HS_ACCT 2>/dev/null; do :; done; done
+  iptables -F HS_ACCT 2>/dev/null
+  iptables -X HS_ACCT 2>/dev/null
+  return 0
+}
+acct_on() {
+  acct_off
+  { echo "*filter"; echo ":HS_ACCT - [0:0]"
+    for i in $(seq $FIRST $LAST); do echo "-A HS_ACCT -s $NET.$i"; echo "-A HS_ACCT -d $NET.$i"; done
+    echo COMMIT; } | iptables-restore --noflush
+  iptables -I FORWARD 1 -i $AP -j HS_ACCT
+  iptables -I FORWARD 1 -o $AP -j HS_ACCT
+}
+usage() { # prints: ip down_bytes up_bytes   (down = to device, up = from device)
+  iptables-save -c -t filter 2>/dev/null | awk '
+    /-A HS_ACCT / { t=$1; sub(/^\[/,"",t); sub(/\]$/,"",t); split(t,c,":"); b=c[2]
+      for(i=1;i<=NF;i++){ if($i=="-s") s=$(i+1); else if($i=="-d") d=$(i+1) }
+      sub("/32","",s); sub("/32","",d)
+      if(s!="") up[s]=b; if(d!="") down[d]=b; s=""; d="" }
+    END { for(ip in up) print ip, down[ip]+0, up[ip]+0 }'
+}
+
+# traffic shaping: HTB on ap0 egress = download (global cap + per-device caps, matched by MAC);
+# ingress policing on ap0 = per-device upload caps. Rebuilt from config, safe to re-run.
+# (explicit quantum 1514 silences the harmless "quantum of class is big" warning from r2q)
+shape_apply() {
+  tc qdisc del dev $AP root 2>/dev/null; tc qdisc del dev $AP ingress 2>/dev/null
+  local G n=100 mac d u
+  G=${CFG[RATE]:-1000}; [ "$G" -ge 1 ] 2>/dev/null || G=1000
+  tc qdisc add dev $AP root handle 1: htb default 20 || return 0
+  tc class add dev $AP parent 1: classid 1:1 htb rate ${G}mbit ceil ${G}mbit quantum 1514
+  tc class add dev $AP parent 1:1 classid 1:20 htb rate 1mbit ceil ${G}mbit quantum 1514
+  tc qdisc add dev $AP parent 1:20 handle 20: fq_codel 2>/dev/null
+  tc qdisc add dev $AP handle ffff: ingress
+  while read -r mac d u; do
+    ismac "$mac" || continue
+    n=$((n+1)); d=${d:-0}; u=${u:-0}
+    if [ "$d" -gt 0 ]; then
+      [ "$d" -gt "$G" ] && d=$G
+      tc class add dev $AP parent 1:1 classid 1:$n htb rate ${d}mbit ceil ${d}mbit quantum 1514
+      tc qdisc add dev $AP parent 1:$n handle $n: fq_codel 2>/dev/null
+      tc filter add dev $AP parent 1: protocol all prio 1 flower dst_mac $mac classid 1:$n
+    fi
+    if [ "$u" -gt 0 ]; then
+      tc filter add dev $AP parent ffff: protocol all prio 1 flower src_mac $mac \
+        action police rate ${u}mbit burst 256k conform-exceed drop
+    fi
+  done < $LIMITS
+  return 0
+}
+
+notify() { # notify TITLE BODY -> desktop notification for the user who started the hotspot
+  local uid=${NUID:-}; [ -n "$uid" ] || return 0
+  runuser -u "$(id -nu "$uid")" -- env DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+    XDG_RUNTIME_DIR="/run/user/$uid" notify-send -a Hotspot -i network-wireless "$1" "$2" >/dev/null 2>&1
+  return 0
+}
+clean() { REPLY=${1//[^A-Za-z0-9 ._-]/}; }   # device names come from the network: strip everything odd
+
+# Background loop (one process, ~8 forks per cycle): join/leave notifications, auto-off when idle,
+# data cap, and the status snapshot that the GUI polls.
+watch() {
+  echo $$ > /run/hotspot-watch.pid
+  umask 022
+  NUID=${SUDO_UID:-${PKEXEC_UID:-}}
+  [ -n "$NUID" ] || NUID=$(loginctl list-users --no-legend 2>/dev/null | awk '$1>=1000{print $1; exit}')
+  declare -A seen pend dname LIP LNM LIM UD UU
+  local now idle_since m n cur ip nm tot C I U d u ch ts lim ld lu _ mac2 SL
+  local sta_ch check_cnt=0 lost=0
+  ch=$(sed -n 's/^channel=//p' /run/hotspot-hostapd.conf 2>/dev/null)
+  get_sta
+  printf -v idle_since '%(%s)T' -1
+  while isup; do
+    load_conf
+    printf -v now '%(%s)T' -1
+    LIP=(); LNM=(); LIM=(); UD=(); UU=()
+    if [ -r $LEASES ]; then   # dnsmasq lease line: expiry mac ip hostname clientid
+      while read -r _ mac2 ip nm _; do
+        [ -n "${nm:-}" ] && { LIP[${mac2,,}]=$ip; LNM[${mac2,,}]=$nm; }
+      done < $LEASES
+    fi
+    while read -r m d u; do [ -n "${u:-}" ] && LIM[$m]="$d"$'\t'"$u"; done < $LIMITS
+    tot=0; U=$(usage)
+    while read -r ip d u; do [ -n "${u:-}" ] && { UD[$ip]=$d; UU[$ip]=$u; tot=$((tot+d+u)); }; done <<<"$U"
+
+    n=0; cur=" "; mapfile -t SL < <(stations)
+    for m in "${SL[@]}"; do
+      [ -n "$m" ] || continue
+      n=$((n+1)); cur="$cur$m "
+      ip=${LIP[$m]:-}; nm=${LNM[$m]:-}
+      if [ -z "${seen[$m]:-}" ]; then
+        : "${pend[$m]:=$now}"
+        if [ -n "$ip" ] || [ $((now - ${pend[$m]})) -ge 8 ]; then
+          seen[$m]=1; unset "pend[$m]"
+          clean "$nm"; dname[$m]=${REPLY:-unknown device}
+          [ "${CFG[NOTIFY]:-1}" = 1 ] && notify "Device joined hotspot" "${dname[$m]} (${ip:-no IP yet}, $m)"
+        fi
+      fi
+    done
+    for m in "${!seen[@]}"; do
+      if [[ $cur != *" $m "* ]]; then
+        [ "${CFG[NOTIFY]:-1}" = 1 ] && notify "Device left hotspot" "${dname[$m]} ($m)"
+        unset "seen[$m]" "dname[$m]"
+      fi
+    done
+    for m in "${!pend[@]}"; do [[ $cur == *" $m "* ]] || unset "pend[$m]"; done
+
+    # snapshot for the GUI (TS lets it compute live speed even if it polls faster than we write)
+    read -r ts _ </proc/uptime
+    {
+      echo "TS=$ts"; echo "CHANNEL=$ch"; echo "TOTAL_BYTES=$tot"
+      for m in "${SL[@]}"; do
+        [ -n "$m" ] || continue
+        ip=${LIP[$m]:-}; clean "${LNM[$m]:-}"; nm=$REPLY
+        lim=${LIM[$m]:-$'0\t0'}; ld=${lim%%$'\t'*}; lu=${lim##*$'\t'}
+        printf 'CLIENT\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$m" "${ip:--}" "${nm:--}" \
+          "${UD[${ip:-none}]:-0}" "${UU[${ip:-none}]:-0}" "$ld" "$lu"
+      done
+    } > $STATUS.tmp && mv -f $STATUS.tmp $STATUS
+
+    [ "$n" -gt 0 ] && idle_since=$now
+    I=${CFG[IDLE_MIN]:-0}; [[ $I =~ ^[0-9]+$ ]] || I=0
+    if [ "$I" -gt 0 ] && [ $((now - idle_since)) -ge $((I*60)) ]; then
+      notify "Hotspot turned off" "No device was connected for $I min"
+      rm -f /run/hotspot-watch.pid; "$0" stop; exit 0
+    fi
+    C=${CFG[CAP_MB]:-0}; [[ $C =~ ^[0-9]+$ ]] || C=0
+    if [ "$C" -gt 0 ] && [ "$tot" -ge $((C*1048576)) ]; then
+      notify "Hotspot turned off" "Data cap of $C MB reached"
+      rm -f /run/hotspot-watch.pid; "$0" stop; exit 0
+    fi
+
+    # every ~12 s: follow the upstream Wi-Fi. The AP must share the STA channel (one-channel radio),
+    # so a channel change means restart; a lost connection (seen twice in a row, so a short roam or
+    # rescan does not count) means stop.
+    check_cnt=$((check_cnt + 1))
+    if [ "$check_cnt" -ge 4 ] && [ -n "$ch" ] && [ -n "${STA:-}" ]; then
+      check_cnt=0
+      sta_ch=$(iw dev "$STA" info 2>/dev/null | awk '/channel/{print $2; exit}')
+      if [ -z "$sta_ch" ]; then
+        lost=$((lost + 1))
+        if [ "$lost" -ge 2 ]; then
+          notify "Hotspot turned off" "Wi-Fi connection lost"
+          rm -f /run/hotspot-watch.pid; "$0" stop; exit 0
+        fi
+      elif [ "$sta_ch" != "$ch" ]; then
+        notify "Hotspot restarting" "Wi-Fi moved from channel $ch to $sta_ch"
+        rm -f /run/hotspot-watch.pid; "$0" stop
+        "$0" start >/dev/null 2>&1 || notify "Hotspot turned off" "Could not restart on channel $sta_ch"
+        exit 0
+      else
+        lost=0
+      fi
+    fi
+
+    sleep 3
+  done
+  rm -f /run/hotspot-watch.pid
+}
+
+stop_pid() {   # stop_pid PIDFILE COMM: only kill the pid if it is still the process we started
+  local p; [ -f "$1" ] || return 0
+  p=$(<"$1"); [[ $p =~ ^[0-9]+$ ]] || return 0
+  [ "$(cat /proc/$p/comm 2>/dev/null)" = "$2" ] || return 0
+  kill "$p" 2>/dev/null
+  for _ in 1 2 3 4 5 6 7 8 9 10; do [ -d /proc/$p ] || break; sleep 0.2; done
+  return 0
+}
+
+stop() {
+  local ipf
+  stop_pid /run/hotspot-watch.pid "$ME"
+  stop_pid /run/hotspot-hostapd.pid hostapd
+  stop_pid /run/hotspot-dnsmasq.pid dnsmasq
+  rules_off
+  isup && iw dev $AP del 2>/dev/null
+  ipf=$(sed -n 's/^IPF=//p' $STATE 2>/dev/null)   # put ip_forward back the way we found it
+  [[ $ipf =~ ^[01]$ ]] && sysctl -qw net.ipv4.ip_forward="$ipf"
+  rm -f /run/hotspot-*.pid /run/hotspot-hostapd.conf $STATUS $STATUS.tmp $STATE
+  return 0
+}
+
+start() {
+  isup && { echo "already up"; exit 0; }
+  load_conf; rules_off   # clear anything left behind by a crash
+  get_sta; [ -n "$STA" ] || { echo "no Wi-Fi interface found"; exit 1; }
+  local CH PHY CC SEC KM PMF EXTRA ISO ACL MAC APMAC PASS n IPF
+  CH=$(iw dev "$STA" info | awk '/channel/{print $2; exit}')
+  [ -n "$CH" ] || { echo "$STA not connected to wifi"; exit 1; }
+  PHY=$(iw dev "$STA" info | awk '/wiphy/{print "phy"$2; exit}')
+  [ -n "$PHY" ] || { echo "cannot find the radio of $STA"; exit 1; }
+  CC=${CFG[COUNTRY]:-}
+  [ -n "$CC" ] || CC=$(iw reg get 2>/dev/null | awk '/^country/{gsub(":","",$2); print $2; exit}')
+  [[ $CC =~ ^[A-Z]{2}$ ]] || CC=""
+  NET=${CFG[SUBNET]:-10.42.50}   # move to another /24 if the upstream network already uses it
+  if ip -4 route show | grep -q "^$NET\."; then
+    for n in $(seq 51 99); do ip -4 route show | grep -q "^10\.42\.$n\." || { NET=10.42.$n; break; }; done
+  fi
+  MODE=g; [ "$CH" -gt 14 ] && MODE=a
+  SEC=${CFG[SECURITY]:-wpa2}
+  case $SEC in
+    wpa3)     KM="SAE";         PMF=2 ;;
+    wpa2wpa3) KM="WPA-PSK SAE"; PMF=1 ;;
+    *)        KM="WPA-PSK";     PMF=0 ;;
+  esac
+  PASS=$(getpass)
+  EXTRA=""
+  [ "$SEC" = wpa2 ] || EXTRA=$'sae_pwe=2\nsae_require_mfp=1\nsae_password='"$PASS"
+  ISO=${CFG[ISOLATE]:-0}; ACL=0; [ "${CFG[ALLOWLIST]:-0}" = 1 ] && ACL=1
+  MAC=$(cat /sys/class/net/"$STA"/address)
+  APMAC=$(printf '%02x' $((0x${MAC:0:2} ^ 2)))${MAC:2}
+  trap 'stop; exit 130' INT TERM    # an interrupted start never leaves half a hotspot behind
+  iw phy "$PHY" interface add $AP type __ap addr "$APMAC" || exit 1
+  ip addr add $NET.1/24 dev $AP; ip link set $AP up || { stop; exit 1; }
+  cat > /run/hotspot-hostapd.conf <<EOT
+interface=$AP
+driver=nl80211
+ctrl_interface=/run/hostapd
+${CC:+country_code=$CC}
+ssid=${CFG[SSID]:-Hotspot}
+hw_mode=$MODE
+channel=$CH
+ieee80211n=1
+wmm_enabled=1
+max_num_sta=${CFG[MAXCLIENTS]:-8}
+ap_isolate=$ISO
+macaddr_acl=$ACL
+deny_mac_file=$DENY
+accept_mac_file=$ALLOW
+auth_algs=1
+wpa=2
+wpa_key_mgmt=$KM
+ieee80211w=$PMF
+rsn_pairwise=CCMP
+wpa_passphrase=$PASS
+$EXTRA
+EOT
+  hostapd -B -P /run/hotspot-hostapd.pid /run/hotspot-hostapd.conf >/run/hotspot-hostapd.log 2>&1 \
+    || { echo "hostapd failed: $(tail -n 5 /run/hotspot-hostapd.log)"; stop; exit 1; }
+  for _ in 1 2 3 4 5 6; do iw dev $AP info | grep -q ssid && break; sleep 0.5; done
+  iw dev $AP info | grep -q ssid \
+    || { echo "AP did not start beaconing ($SEC, ch $CH): $(tail -n 5 /run/hotspot-hostapd.log)"; stop; exit 1; }
+  dnsmasq --conf-file=/dev/null --interface=$AP --bind-interfaces --except-interface=lo \
+    --dhcp-range=$NET.$FIRST,$NET.$LAST,12h --pid-file=/run/hotspot-dnsmasq.pid \
+    --dhcp-leasefile=$LEASES \
+    || { echo "dnsmasq failed to start (is another DNS/DHCP server using the port?)"; stop; exit 1; }
+  IPF=$(sysctl -n net.ipv4.ip_forward)
+  printf 'STA=%s\nNET=%s\nIPF=%s\n' "$STA" "$NET" "$IPF" > $STATE
+  sysctl -qw net.ipv4.ip_forward=1
+  rules_on || { echo "firewall setup failed"; stop; exit 1; }
+  acct_on
+  shape_apply
+  trap - INT TERM
+  setsid "$0" watch </dev/null >/dev/null 2>&1 &
+  echo "up: ${CFG[SSID]:-Hotspot} on ch $CH ($STA, $NET.0/24)"
+}
+
+case "${1:-}" in
+  start|stop|restart|ssid|pass|max|rate|security|block|unblock|allow|disallow|limit|secret|apply|watch|init) need_root "$1" ;;
+esac
+
+case "${1:-}" in
+  init) echo "ok" ;;
+  start) start ;;
+  stop) stop ;;
+  restart) stop; start ;;
+  watch) watch ;;
+  ssid) setkv SSID "$2"; echo "restart to apply" ;;
+  pass) validpw "$2" || { echo "8-63 chars, no | character"; exit 1; }; setpass "$2"; echo "restart to apply" ;;
+  max) [[ $2 =~ ^[0-9]+$ ]] || exit 1; setkv MAXCLIENTS "$2"; echo "restart to apply" ;;
+  rate) [[ ${2:-} =~ ^[0-9]*$ ]] || exit 1; setkv RATE "${2:-}"; echo "restart to apply (Mbit/s download cap, empty = none)" ;;
+  security) [[ ${2:-} =~ ^(wpa2|wpa2wpa3|wpa3)$ ]] || { echo "wpa2|wpa2wpa3|wpa3"; exit 1; }; setkv SECURITY "$2"; echo "restart to apply" ;;
+  block) m=${2,,}; ismac "$m" || { echo bad mac; exit 1; }
+         grep -qix "$m" $DENY || echo "$m" >> $DENY
+         sed -i "/^$m$/d" $ALLOW      # a device is never on both lists
+         isup && { hostapd_cli -i $AP accept_acl DEL_MAC "$m"; hostapd_cli -i $AP deny_acl ADD_MAC "$m"; hostapd_cli -i $AP deauthenticate "$m"; } ;;
+  unblock) m=${2,,}; ismac "$m" || { echo bad mac; exit 1; }
+         sed -i "/^$m$/d" $DENY
+         isup && hostapd_cli -i $AP deny_acl DEL_MAC "$m" ;;
+  allow) m=${2,,}; ismac "$m" || { echo bad mac; exit 1; }
+         sed -i "/^$m$/d" $DENY
+         grep -qix "$m" $ALLOW || echo "$m" >> $ALLOW
+         isup && { hostapd_cli -i $AP deny_acl DEL_MAC "$m"; hostapd_cli -i $AP accept_acl ADD_MAC "$m"; } ;;
+  disallow) m=${2,,}; ismac "$m" || { echo bad mac; exit 1; }
+         sed -i "/^$m$/d" $ALLOW
+         if isup; then
+           hostapd_cli -i $AP accept_acl DEL_MAC "$m"
+           [ "${CFG[ALLOWLIST]:-0}" = 1 ] && hostapd_cli -i $AP deauthenticate "$m"
+         fi ;;
+  limit) # wifi-hotspot limit MAC DOWN_MBIT UP_MBIT   (0 and 0 removes the limit)
+         m=${2,,}; d=${3:-}; u=${4:-}
+         ismac "$m" || { echo bad mac; exit 1; }
+         [[ $d =~ ^[0-9]+$ ]] && [[ $u =~ ^[0-9]+$ ]] && [ "$d" -le 1000 ] && [ "$u" -le 1000 ] || { echo "limits must be 0-1000 Mbit/s"; exit 1; }
+         sed -i "/^$m /d" $LIMITS
+         { [ "$d" -gt 0 ] || [ "$u" -gt 0 ]; } && echo "$m $d $u" >> $LIMITS
+         isup && shape_apply ;;
+  clients) # tab-separated: MAC IP HOSTNAME DOWN_BYTES UP_BYTES LIMIT_DOWN LIMIT_UP (from the live snapshot; no root needed)
+         isup && [ -r $STATUS ] && sed -n 's/^CLIENT\t//p' $STATUS ;;
+  blocked) cat $DENY ;;
+  show) # never prints the password; works without root
+         get_sta
+         echo "SSID=${CFG[SSID]:-}"; echo "MAXCLIENTS=${CFG[MAXCLIENTS]:-8}"; echo "RATE=${CFG[RATE]:-}"
+         echo "SECURITY=${CFG[SECURITY]:-wpa2}"; echo "CHANNEL=$(iw dev "$STA" info 2>/dev/null | awk '/channel/{print $2; exit}')"
+         echo "INTERFACE=$STA"
+         echo "ISOLATE=${CFG[ISOLATE]:-0}"; echo "ALLOWLIST=${CFG[ALLOWLIST]:-0}"; echo "IDLE_MIN=${CFG[IDLE_MIN]:-0}"
+         echo "CAP_MB=${CFG[CAP_MB]:-0}"; echo "NOTIFY=${CFG[NOTIFY]:-1}"; echo "ALLOWED=$(paste -sd, $ALLOW)"
+         isup && [ -r $STATUS ] && grep '^TOTAL_BYTES=' $STATUS ;;
+  secret) getpass ;;
+  apply) # wifi-hotspot apply SSID MAXCLIENTS RATE SECURITY ISOLATE ALLOWLIST IDLE_MIN CAP_MB NOTIFY ; new password (optional) on stdin
+         ssid=${2:-}; max=${3:-}; rate=${4:-}; sec=${5:-}; iso=${6:-}; acl=${7:-}; idle=${8:-}; cap=${9:-}; ntf=${10:-}
+         IFS= read -r pw || pw=""
+         [ -n "$ssid" ] && [ "$(printf %s "$ssid" | wc -c)" -le 32 ] || { echo "bad network name (1-32 bytes)"; exit 1; }
+         [[ $max =~ ^[0-9]+$ ]] && [ "$max" -ge 1 ] && [ "$max" -le 32 ] || { echo "max devices must be 1-32"; exit 1; }
+         [[ $rate =~ ^[0-9]*$ ]] || { echo "bad rate"; exit 1; }
+         [[ $sec =~ ^(wpa2|wpa2wpa3|wpa3)$ ]] || { echo "bad security mode"; exit 1; }
+         [[ $iso =~ ^[01]$ ]] && [[ $acl =~ ^[01]$ ]] && [[ $ntf =~ ^[01]$ ]] || { echo "bad on/off value"; exit 1; }
+         [[ $idle =~ ^[0-9]+$ ]] && [ "$idle" -le 1440 ] || { echo "idle minutes must be 0-1440"; exit 1; }
+         [[ $cap =~ ^[0-9]+$ ]] && [ "$cap" -le 1048576 ] || { echo "bad data cap"; exit 1; }
+         [ -z "$pw" ] || validpw "$pw" || { echo "password: 8-63 chars, no | character"; exit 1; }
+         # turning approved-only mode on: approve everyone connected right now so nobody is locked out
+         if [ "$acl" = 1 ] && [ "${CFG[ALLOWLIST]:-0}" != 1 ] && isup; then
+           for m in $(stations); do
+             grep -qix "$m" $DENY || grep -qix "$m" $ALLOW || echo "$m" >> $ALLOW
+           done
+         fi
+         setkv SSID "$ssid"; setkv MAXCLIENTS "$max"; setkv RATE "$rate"; setkv SECURITY "$sec"
+         setkv ISOLATE "$iso"; setkv ALLOWLIST "$acl"; setkv IDLE_MIN "$idle"; setkv CAP_MB "$cap"; setkv NOTIFY "$ntf"
+         [ -z "$pw" ] || setpass "$pw"
+         if isup; then stop; start; fi ;;
+  *) echo "usage: $ME start|stop|restart|ssid X|pass X|max N|rate Mbps|security M|block MAC|unblock MAC|allow MAC|disallow MAC|limit MAC DOWN UP|clients|blocked|show|secret|apply|init|watch" ;;
+esac
+exit 0
