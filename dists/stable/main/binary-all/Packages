@@ -5,10 +5,10 @@ Maintainer: Sudarsanam R <sudarsanam2006@gmail.com>
 Depends: hostapd, dnsmasq-base, iw, iproute2, iptables, pkexec, util-linux, python3, python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1, sudo
 Recommends: python3-qrcode, libnotify-bin
 Filename: pool/main/wifi-hotspot_1.0-1_all.deb
-Size: 18848
-MD5sum: 6cc0651d2f054d4c67b2c02a7d252fc2
-SHA1: 04aee7eee4d56201267c301896ab47aab6610c8a
-SHA256: 6bbc0e8ba4d73173c5f2182d5f97056d4d4d246a245827baccf45001899f697a
+Size: 19730
+MD5sum: 53375c794b8006eeba169994d9b696f2
+SHA1: 418ad2db35e5273de2b3cd63bc7b9bfa574f4758
+SHA256: c52d437f1e504cc247817367ae1df7705aaa8e404bceac7673f4801bbf5e7e63
 Section: net
 Priority: optional
 Homepage: https://github.com/SudarsanamR/wifi-hotspot
