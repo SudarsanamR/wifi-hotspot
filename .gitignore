@@ -1,6 +1,9 @@
 # Build artifacts
+build/
+*.deb
 *hotspot-*.tar.gz
 SHA256SUMS
+apt-repo/
 __pycache__/
 *.pyc
 .ruff_cache/

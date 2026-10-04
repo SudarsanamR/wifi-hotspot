@@ -55,31 +55,76 @@ jobs:
     needs: [lint, test]
     permissions:
       contents: write
+      pages: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
-      # keep the src/ + data/ layout: install.sh reads its files from there
+      - name: Set version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Install packaging tools
+        run: sudo apt-get install -y dpkg-dev apt-utils
+
+      # ── Tarball ──
       - name: Build tarball
         run: |
-          VERSION=${GITHUB_REF_NAME#v}
           D="wifi-hotspot-${VERSION}"
           mkdir -p "$D/src" "$D/data" "$D/gnome-extension"
           cp src/wifi-hotspot src/wifi-hotspot-gui "$D/src/"
           cp data/local.sudar.hotspot.policy data/local.sudar.Hotspot.desktop data/90-hotspot-ap0.conf "$D/data/"
           cp gnome-extension/metadata.json gnome-extension/extension.js "$D/gnome-extension/"
           cp install.sh uninstall.sh LICENSE README.md CHANGELOG.md "$D/"
-          # every file install.sh installs must be in the bundle
+          # smoke test: every file install.sh references must be in the bundle
           for f in $(grep -oE '(src|data|gnome-extension)/[A-Za-z0-9._-]+' install.sh | sort -u); do
             [ -f "$D/$f" ] || { echo "missing from tarball: $f"; exit 1; }
           done
           tar czf "$D.tar.gz" "$D"
           sha256sum "$D.tar.gz" > SHA256SUMS
 
+      # ── .deb package ──
+      - name: Build .deb
+        run: bash packaging/build-deb.sh "$VERSION"
+
+      # ── APT repository on GitHub Pages ──
+      - name: Import GPG key
+        run: echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
+
+      - name: Build APT repository
+        run: |
+          mkdir -p apt-repo/pool/main
+          mkdir -p apt-repo/dists/stable/main/binary-all
+
+          cp build/wifi-hotspot_*_all.deb apt-repo/pool/main/
+
+          cd apt-repo
+          dpkg-scanpackages --multiversion pool/ > dists/stable/main/binary-all/Packages
+          gzip -k dists/stable/main/binary-all/Packages
+
+          cd dists/stable
+          apt-ftparchive release . > Release
+          gpg --batch --yes --armor --detach-sign -o Release.gpg Release
+          gpg --batch --yes --armor --clearsign  -o InRelease  Release
+          cd ../..
+
+          # Public key and setup script
+          gpg --armor --export > gpg.key
+          cp "$GITHUB_WORKSPACE/packaging/setup-repo.sh" setup.sh
+
+      - name: Deploy APT repo to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./apt-repo
+          keep_files: false
+
+      # ── GitHub Release ──
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             wifi-hotspot-*.tar.gz
+            build/wifi-hotspot_*_all.deb
             SHA256SUMS
-          prerelease: true
+          prerelease: false
           generate_release_notes: true

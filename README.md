@@ -22,32 +22,27 @@ interface on the same radio instead.
 - The hotspot runs on the **same channel (and band) as the Wi-Fi you are connected to**. One radio, one channel.
   2.4 and 5 GHz at the same time is not possible.
 
-## Download
+## Install
 
-From [GitHub Releases](../../releases):
+### Option 1: APT (recommended)
 
 ```bash
-# download and extract
-tar xzf wifi-hotspot-1.0.tar.gz
-cd wifi-hotspot-1.0
+curl -fsSL https://sudarsanamr.github.io/wifi-hotspot/setup.sh | sudo bash
+sudo apt install wifi-hotspot
 ```
 
-Or clone the repo:
+This adds the signed APT repository and installs wifi-hotspot with all dependencies.
+
+### Option 2: From source
 
 ```bash
 git clone https://github.com/SudarsanamR/wifi-hotspot.git
 cd wifi-hotspot
-```
-
-## Install
-
-Install the dependencies, then run the installer:
-
-```bash
 sudo apt install hostapd dnsmasq-base iw iproute2 iptables polkitd pkexec util-linux python3 \
                  python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 python3-qrcode libnotify-bin
 sudo ./install.sh
 ```
+
 Then open **Wi-Fi Hotspot** from the app grid. A random password is generated on first install.
 The installer also adds a toggle to GNOME Quick Settings (log out and back in to see it).
 
@@ -75,6 +70,14 @@ The installer also adds a toggle to GNOME Quick Settings (log out and back in to
 - IPv4 only. Clients get no IPv6.
 
 ## Uninstall
+
+APT:
+```bash
+sudo apt remove wifi-hotspot          # keeps settings
+sudo apt purge wifi-hotspot           # deletes settings and the saved password too
+```
+
+From source:
 ```bash
 sudo ./uninstall.sh          # keeps settings
 sudo ./uninstall.sh --purge  # deletes settings and the saved password too
