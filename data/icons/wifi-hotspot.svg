@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e88e5"/>
+      <stop offset="100%" stop-color="#0d47a1"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="3" stdDeviation="3" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+  <!-- Rounded App Squircle Background -->
+  <rect x="10" y="10" width="108" height="108" rx="24" ry="24" fill="url(#bgGrad)" filter="url(#shadow)"/>
+  
+  <!-- Wi-Fi Waves -->
+  <g fill="none" stroke="#ffffff" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Outer Arc -->
+    <path d="M 30 48 A 48 48 0 0 1 98 48" stroke-width="8"/>
+    <!-- Middle Arc -->
+    <path d="M 42 62 A 31 31 0 0 1 86 62" stroke-width="8"/>
+    <!-- Inner Arc -->
+    <path d="M 53 75 A 15 15 0 0 1 75 75" stroke-width="8"/>
+  </g>
+  <!-- Center Dot -->
+  <circle cx="64" cy="90" r="6.5" fill="#ffffff"/>
+</svg>

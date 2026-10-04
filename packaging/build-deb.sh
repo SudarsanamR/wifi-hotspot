@@ -14,6 +14,7 @@ mkdir -p "build/$PKG/usr/local/sbin"
 mkdir -p "build/$PKG/usr/local/bin"
 mkdir -p "build/$PKG/usr/share/polkit-1/actions"
 mkdir -p "build/$PKG/usr/share/applications"
+mkdir -p "build/$PKG/usr/share/icons/hicolor/scalable/apps"
 mkdir -p "build/$PKG/usr/share/wifi-hotspot/gnome-extension"
 mkdir -p "build/$PKG/etc/NetworkManager/conf.d"
 
@@ -24,6 +25,8 @@ install -m 644 data/local.sudar.hotspot.policy \
                                           "build/$PKG/usr/share/polkit-1/actions/"
 install -m 644 data/local.sudar.Hotspot.desktop \
                                           "build/$PKG/usr/share/applications/"
+install -m 644 data/icons/wifi-hotspot.svg \
+                                          "build/$PKG/usr/share/icons/hicolor/scalable/apps/"
 install -m 644 gnome-extension/extension.js \
                                           "build/$PKG/usr/share/wifi-hotspot/gnome-extension/"
 install -m 644 gnome-extension/metadata.json \
@@ -67,8 +70,9 @@ systemctl disable --now hostapd 2>/dev/null || true
 # Reload NetworkManager to pick up the ap0 exclusion
 systemctl reload NetworkManager 2>/dev/null || true
 
-# Update desktop database
+# Update desktop and icon databases
 command -v update-desktop-database >/dev/null && update-desktop-database /usr/share/applications || true
+command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache /usr/share/icons/hicolor 2>/dev/null || true
 
 # Initialize config (idempotent — preserves existing config and password)
 "$BIN" init >/dev/null 2>&1 || true

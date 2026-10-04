@@ -43,6 +43,9 @@ install -m 755 src/wifi-hotspot "$BIN"
 install -m 755 src/wifi-hotspot-gui /usr/local/bin/wifi-hotspot-gui
 install -m 644 data/local.sudar.hotspot.policy /usr/share/polkit-1/actions/local.sudar.hotspot.policy
 install -m 644 data/local.sudar.Hotspot.desktop /usr/share/applications/local.sudar.Hotspot.desktop
+install -d /usr/share/icons/hicolor/scalable/apps
+install -m 644 data/icons/wifi-hotspot.svg /usr/share/icons/hicolor/scalable/apps/wifi-hotspot.svg
+command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache /usr/share/icons/hicolor 2>/dev/null || true
 command -v update-desktop-database >/dev/null && update-desktop-database /usr/share/applications || true
 
 # NetworkManager must leave the virtual ap0 interface alone, or it fights hostapd for it
