@@ -174,7 +174,7 @@ teardown() { hs_teardown; }
 @test "start brings up the AP on the client's channel with a locally administered MAC" {
   run hs start
   [ "$status" -eq 0 ]
-  [[ $output == "up: "*" on ch 6 (wlan0, 10.42.50.0/24)" ]]
+  [[ ${lines[-1]} == "up: "*" on ch 6 (wlan0, 10.42.50.0/24)" ]]
   grep -q "iw phy phy0 interface add hstest0 type __ap addr 00:11:22:33:44:55" "$T/calls"
   c="$T/run/hotspot-hostapd.conf"
   grep -qx channel=6 "$c"; grep -qx hw_mode=g "$c"; grep -qx country_code=DE "$c"
