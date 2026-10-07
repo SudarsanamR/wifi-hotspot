@@ -108,7 +108,8 @@ if [ -n "$USER_NAME" ] && [ "$USER_NAME" != root ] && [[ $USER_NAME =~ ^[a-z_][a
       # Enable the extension. Try gnome-extensions first, then fall back to
       # gsettings (directly edits dconf, works even without a D-Bus session).
       if ! runuser -u "$USER_NAME" -- gnome-extensions enable "$EXT_UUID" 2>/dev/null; then
-        export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$USER_NAME")/bus"
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$USER_NAME")/bus"
+        export DBUS_SESSION_BUS_ADDRESS
         current=$(runuser -u "$USER_NAME" -- gsettings get org.gnome.shell enabled-extensions 2>/dev/null)
         if [ -z "$current" ]; then
           : # schema unavailable; nothing to do

@@ -87,7 +87,8 @@ if command -v gnome-shell >/dev/null 2>&1; then
     install -m 644 -o "$USER_NAME" -g "$USER_GID" gnome-extension/extension.js "$EXT_DIR/"
     # Try gnome-extensions first, then fall back to gsettings (works without D-Bus session).
     if ! runuser -u "$USER_NAME" -- gnome-extensions enable "$EXT_UUID" 2>/dev/null; then
-      export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$USER_NAME")/bus"
+      DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$USER_NAME")/bus"
+      export DBUS_SESSION_BUS_ADDRESS
       current=$(runuser -u "$USER_NAME" -- gsettings get org.gnome.shell enabled-extensions 2>/dev/null)
       if [ -z "$current" ]; then
         : # schema unavailable; nothing to do
