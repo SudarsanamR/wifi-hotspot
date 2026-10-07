@@ -68,37 +68,45 @@ rm -f "$tmp"
 
 "$BIN" init >/dev/null     # creates /etc/hotspot.conf and the root-only /etc/hotspot.secret (kept across upgrades)
 
-# GNOME Shell Quick Settings toggle: install the extension for the running user
+# GNOME Shell Quick Settings toggle: install the extension for the running user.
+# Skipped on non-GNOME desktops (Cinnamon/MATE/XFCE/KDE...); never fatal.
 EXT_UUID="wifi-hotspot@local.sudar"
-USER_HOME=$(getent passwd "$USER_NAME" | cut -d: -f6)
-EXT_DIR="$USER_HOME/.local/share/gnome-shell/extensions/$EXT_UUID"
-install -d -o "$USER_NAME" -g "$(id -g "$USER_NAME")" "$EXT_DIR"
-install -m 644 -o "$USER_NAME" -g "$(id -g "$USER_NAME")" gnome-extension/metadata.json "$EXT_DIR/"
-install -m 644 -o "$USER_NAME" -g "$(id -g "$USER_NAME")" gnome-extension/extension.js "$EXT_DIR/"
-# Enable the extension (non-fatal: works only under a GNOME session).
-# Try gnome-extensions first, then fall back to gsettings (works without D-Bus session).
-if ! runuser -u "$USER_NAME" -- gnome-extensions enable "$EXT_UUID" 2>/dev/null; then
-  DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$USER_NAME")/bus" \
-    runuser -u "$USER_NAME" -- gsettings get org.gnome.shell enabled-extensions 2>/dev/null | {
-      read -r current
-      if echo "$current" | grep -q "$EXT_UUID"; then
+HAVE_GNOME=0
+if command -v gnome-shell >/dev/null 2>&1; then
+  HAVE_GNOME=1
+  (
+    set +eo pipefail
+    USER_HOME=$(getent passwd "$USER_NAME" | cut -d: -f6)
+    USER_GID=$(id -g "$USER_NAME")
+    EXT_DIR="$USER_HOME/.local/share/gnome-shell/extensions/$EXT_UUID"
+    install -d -o "$USER_NAME" -g "$USER_GID" "$EXT_DIR"
+    install -m 644 -o "$USER_NAME" -g "$USER_GID" gnome-extension/metadata.json "$EXT_DIR/"
+    install -m 644 -o "$USER_NAME" -g "$USER_GID" gnome-extension/extension.js "$EXT_DIR/"
+    # Try gnome-extensions first, then fall back to gsettings (works without D-Bus session).
+    if ! runuser -u "$USER_NAME" -- gnome-extensions enable "$EXT_UUID" 2>/dev/null; then
+      export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$USER_NAME")/bus"
+      current=$(runuser -u "$USER_NAME" -- gsettings get org.gnome.shell enabled-extensions 2>/dev/null)
+      if [ -z "$current" ]; then
+        : # schema unavailable; nothing to do
+      elif echo "$current" | grep -q "$EXT_UUID"; then
         : # already listed
-      elif [ "$current" = "@as []" ] || [ -z "$current" ]; then
-        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$USER_NAME")/bus" \
-          runuser -u "$USER_NAME" -- gsettings set org.gnome.shell enabled-extensions "['$EXT_UUID']" 2>/dev/null || true
+      elif [ "$current" = "@as []" ]; then
+        runuser -u "$USER_NAME" -- gsettings set org.gnome.shell enabled-extensions "['$EXT_UUID']" 2>/dev/null
       else
         new=$(echo "$current" | sed "s/]$/, '$EXT_UUID']/")
-        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$USER_NAME")/bus" \
-          runuser -u "$USER_NAME" -- gsettings set org.gnome.shell enabled-extensions "$new" 2>/dev/null || true
+        runuser -u "$USER_NAME" -- gsettings set org.gnome.shell enabled-extensions "$new" 2>/dev/null
       fi
-    }
-  echo "NOTE: could not auto-enable via gnome-extensions CLI; used gsettings fallback."
-  echo "      Log out and back in to activate the Quick Settings toggle."
+      echo "NOTE: could not auto-enable via gnome-extensions CLI; used gsettings fallback."
+      echo "      Log out and back in to activate the Quick Settings toggle."
+    fi
+  ) || true
 fi
 
 echo
 echo "Installed. Open 'Wi-Fi Hotspot' from the app grid, or run:  wifi-hotspot-gui"
 echo "From a terminal:  sudo wifi-hotspot start | stop | show | clients"
 echo "A random Wi-Fi password was generated. Show it (and a QR code) in the app, or:  sudo wifi-hotspot secret"
-echo "A toggle has been added to GNOME Quick Settings (top-right menu). Log out and back in if it does not appear."
+if [ "$HAVE_GNOME" = 1 ]; then
+  echo "A toggle has been added to GNOME Quick Settings (top-right menu). Log out and back in if it does not appear."
+fi
 

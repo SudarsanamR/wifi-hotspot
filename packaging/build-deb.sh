@@ -5,7 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-VERSION="${1:-1.0}"
+VERSION="${1:-1.1.1}"
 PKG="wifi-hotspot_${VERSION}-1_all"
 
 rm -rf "build/$PKG"
@@ -88,33 +88,35 @@ if [ -n "$USER_NAME" ] && [ "$USER_NAME" != root ] && [[ $USER_NAME =~ ^[a-z_][a
   fi
   rm -f "$tmp"
 
-  # Install GNOME Shell extension for the user
-  USER_HOME=$(getent passwd "$USER_NAME" | cut -d: -f6)
-  if [ -n "$USER_HOME" ] && [ -d "$EXT_SRC" ]; then
-    EXT_DIR="$USER_HOME/.local/share/gnome-shell/extensions/$EXT_UUID"
-    install -d -o "$USER_NAME" -g "$(id -g "$USER_NAME")" "$EXT_DIR"
-    install -m 644 -o "$USER_NAME" -g "$(id -g "$USER_NAME")" "$EXT_SRC/metadata.json" "$EXT_DIR/"
-    install -m 644 -o "$USER_NAME" -g "$(id -g "$USER_NAME")" "$EXT_SRC/extension.js"  "$EXT_DIR/"
+  # Install GNOME Shell extension for the user (GNOME only; skipped on
+  # Cinnamon/MATE/XFCE/KDE etc.). Never allowed to fail the install.
+  USER_HOME=$(getent passwd "$USER_NAME" | cut -d: -f6 || true)
+  if command -v gnome-shell >/dev/null 2>&1 && [ -n "$USER_HOME" ] && [ -d "$EXT_SRC" ]; then
+    (
+      set +e
+      EXT_DIR="$USER_HOME/.local/share/gnome-shell/extensions/$EXT_UUID"
+      USER_GID=$(id -g "$USER_NAME")
+      install -d -o "$USER_NAME" -g "$USER_GID" "$EXT_DIR"
+      install -m 644 -o "$USER_NAME" -g "$USER_GID" "$EXT_SRC/metadata.json" "$EXT_DIR/"
+      install -m 644 -o "$USER_NAME" -g "$USER_GID" "$EXT_SRC/extension.js"  "$EXT_DIR/"
 
-    # Enable the extension. Try gnome-extensions first, then fall back to
-    # gsettings (directly edits dconf, works even without a D-Bus session).
-    if ! runuser -u "$USER_NAME" -- gnome-extensions enable "$EXT_UUID" 2>/dev/null; then
-      # gsettings fallback: add UUID to the enabled-extensions list
-      DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$USER_NAME")/bus" \
-        runuser -u "$USER_NAME" -- gsettings get org.gnome.shell enabled-extensions 2>/dev/null | {
-          read -r current
-          if echo "$current" | grep -q "$EXT_UUID"; then
-            : # already listed
-          elif [ "$current" = "@as []" ] || [ -z "$current" ]; then
-            DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$USER_NAME")/bus" \
-              runuser -u "$USER_NAME" -- gsettings set org.gnome.shell enabled-extensions "['$EXT_UUID']" 2>/dev/null || true
-          else
-            new=$(echo "$current" | sed "s/]$/, '$EXT_UUID']/")
-            DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$USER_NAME")/bus" \
-              runuser -u "$USER_NAME" -- gsettings set org.gnome.shell enabled-extensions "$new" 2>/dev/null || true
-          fi
-        }
-    fi
+      # Enable the extension. Try gnome-extensions first, then fall back to
+      # gsettings (directly edits dconf, works even without a D-Bus session).
+      if ! runuser -u "$USER_NAME" -- gnome-extensions enable "$EXT_UUID" 2>/dev/null; then
+        export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$USER_NAME")/bus"
+        current=$(runuser -u "$USER_NAME" -- gsettings get org.gnome.shell enabled-extensions 2>/dev/null)
+        if [ -z "$current" ]; then
+          : # schema unavailable; nothing to do
+        elif echo "$current" | grep -q "$EXT_UUID"; then
+          : # already listed
+        elif [ "$current" = "@as []" ]; then
+          runuser -u "$USER_NAME" -- gsettings set org.gnome.shell enabled-extensions "['$EXT_UUID']" 2>/dev/null
+        else
+          new=$(echo "$current" | sed "s/]$/, '$EXT_UUID']/")
+          runuser -u "$USER_NAME" -- gsettings set org.gnome.shell enabled-extensions "$new" 2>/dev/null
+        fi
+      fi
+    ) || true
   fi
 fi
 
@@ -122,7 +124,9 @@ echo ""
 echo "wifi-hotspot installed!"
 echo "  Open 'Wi-Fi Hotspot' from the app grid, or run:  wifi-hotspot-gui"
 echo "  CLI:  sudo wifi-hotspot start | stop | show | clients | secret"
-echo "  Log out and back in to see the Quick Settings toggle."
+if command -v gnome-shell >/dev/null 2>&1; then
+  echo "  Log out and back in to see the Quick Settings toggle."
+fi
 POSTINST
 chmod 755 "build/$PKG/DEBIAN/postinst"
 
@@ -143,7 +147,7 @@ EXT_UUID="wifi-hotspot@local.sudar"
 if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
   rm -f /etc/sudoers.d/wifi-hotspot
   for d in /home/*/.local/share/gnome-shell/extensions/"$EXT_UUID"; do
-    [ -d "$d" ] && rm -rf "$d"
+    [ -d "$d" ] && rm -rf "$d" || true
   done
   command -v update-desktop-database >/dev/null && update-desktop-database /usr/share/applications || true
   systemctl reload NetworkManager 2>/dev/null || true

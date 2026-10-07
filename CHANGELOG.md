@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.1] — 2026-10-07
+
+### Fixed
+- `.deb` install failed on non-GNOME desktops (e.g. Linux Mint / Cinnamon) with "post-installation script subprocess returned error exit status 1". The GNOME Shell extension step is now skipped when `gnome-shell` is absent and can no longer abort `postinst` or `install.sh`.
+- `.deb` `postrm` could fail on removal when no user had the GNOME extension installed.
+
 ## [1.0] — 2026-10-04
 
 ### Added
