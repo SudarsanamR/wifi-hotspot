@@ -5,7 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-VERSION="${1:-1.1.1}"
+VERSION="${1:-1.1.2}"
 PKG="wifi-hotspot_${VERSION}-1_all"
 
 rm -rf "build/$PKG"
@@ -17,6 +17,7 @@ mkdir -p "build/$PKG/usr/share/applications"
 mkdir -p "build/$PKG/usr/share/icons/hicolor/scalable/apps"
 mkdir -p "build/$PKG/usr/share/wifi-hotspot/gnome-extension"
 mkdir -p "build/$PKG/etc/NetworkManager/conf.d"
+mkdir -p "build/$PKG/usr/share/man/man1" "build/$PKG/usr/share/man/man8"
 
 # ── Install files ──
 install -m 755 src/wifi-hotspot           "build/$PKG/usr/local/sbin/wifi-hotspot"
@@ -32,6 +33,10 @@ install -m 644 gnome-extension/extension.js \
 install -m 644 gnome-extension/metadata.json \
                                           "build/$PKG/usr/share/wifi-hotspot/gnome-extension/"
 install -m 644 data/90-hotspot-ap0.conf   "build/$PKG/etc/NetworkManager/conf.d/"
+# man pages (Debian policy: gzip -9, no timestamp for reproducible builds)
+gzip -9n -c man/wifi-hotspot.8     > "build/$PKG/usr/share/man/man8/wifi-hotspot.8.gz"
+gzip -9n -c man/wifi-hotspot-gui.1 > "build/$PKG/usr/share/man/man1/wifi-hotspot-gui.1.gz"
+chmod 644 "build/$PKG"/usr/share/man/man*/*.gz
 
 # ── DEBIAN/control ──
 cat > "build/$PKG/DEBIAN/control" <<CTRL

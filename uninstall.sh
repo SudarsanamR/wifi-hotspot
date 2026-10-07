@@ -11,7 +11,9 @@ rm -f /usr/local/sbin/wifi-hotspot /usr/local/bin/wifi-hotspot-gui \
       /usr/share/polkit-1/actions/local.sudar.hotspot.policy \
       /usr/share/applications/local.sudar.Hotspot.desktop \
       /etc/sudoers.d/wifi-hotspot /etc/sudoers.d/hotspot \
-      /etc/NetworkManager/conf.d/90-hotspot-ap0.conf
+      /etc/NetworkManager/conf.d/90-hotspot-ap0.conf \
+      /usr/local/share/man/man8/wifi-hotspot.8 \
+      /usr/local/share/man/man1/wifi-hotspot-gui.1
 systemctl reload NetworkManager 2>/dev/null
 command -v update-desktop-database >/dev/null && update-desktop-database /usr/share/applications
 # remove the GNOME Shell extension for every user that has it

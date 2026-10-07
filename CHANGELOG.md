@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.2] — 2026-10-07
+
+### Added
+- Man pages: `man wifi-hotspot` (section 8) and `man wifi-hotspot-gui` (section 1). Shipped in the `.deb`, installed by `install.sh`, and linted in CI.
+
 ## [1.1.1] — 2026-10-07
 
 ### Fixed

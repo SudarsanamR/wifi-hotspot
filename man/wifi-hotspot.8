@@ -1,0 +1,349 @@
+.\" Man page for wifi-hotspot.  View with:  man ./man/wifi-hotspot.8
+.TH WIFI-HOTSPOT 8 "October 2026" "wifi-hotspot 1.1.2" "System Administration"
+.SH NAME
+wifi-hotspot \- share a Wi-Fi connection as a hotspot while staying connected
+.SH SYNOPSIS
+.B sudo wifi-hotspot
+.RB { start | stop | restart }
+.br
+.B sudo wifi-hotspot
+.RB { ssid
+.IR NAME | \c
+.B pass
+.IR PASSWORD | \c
+.B max
+.IR N | \c
+.B rate
+.RI [ MBIT ] | \c
+.B security
+.IR MODE }
+.br
+.B sudo wifi-hotspot
+.RB { block | unblock | allow | disallow }
+.I MAC
+.br
+.B sudo wifi-hotspot limit
+.I MAC DOWN UP
+.br
+.B wifi-hotspot
+.RB { show | clients | blocked }
+.br
+.B sudo wifi-hotspot secret
+.SH DESCRIPTION
+.B wifi-hotspot
+turns a Linux laptop into a Windows-style "Mobile Hotspot".
+It creates a virtual access-point interface,
+.BR ap0 ,
+next to the Wi-Fi interface that is already connected to the internet, and
+shares that connection with other devices.
+.PP
+It uses
+.BR hostapd (8)
+for the access point,
+.BR dnsmasq (8)
+for DHCP and DNS,
+.BR iptables (8)
+for NAT and firewalling, and
+.BR tc (8)
+for speed limits.
+Firewall rules live in their own chains
+.RB ( HS_IN ", " HS_FWD ", " HS_NAT ", " HS_ACCT ),
+so they are added and removed cleanly without touching other rules.
+.PP
+The access point always uses the same channel and band as the network the
+laptop is connected to, because a single radio can only be on one channel.
+If that network changes channel, the hotspot restarts on the new one.
+If the Wi-Fi connection is lost for about 24 seconds, the hotspot stops.
+.PP
+Commands that change settings, start or stop the hotspot, or reveal the
+password must be run as root.
+.BR show ", " clients " and " blocked
+work as a normal user.
+Most setting changes are saved right away but take effect only after
+.BR restart .
+.PP
+The graphical front end,
+.BR wifi-hotspot-gui (1),
+calls this program for every action.
+.SH COMMANDS
+.SS Running the hotspot
+.TP
+.B start
+Create
+.BR ap0 ,
+start hostapd and dnsmasq, set up the firewall and NAT, and start the
+background watcher.
+Prints the network name, channel, upstream interface and subnet.
+If hostapd fails, the last lines of its log are printed.
+.TP
+.B stop
+Stop the hotspot, remove
+.BR ap0 ,
+and remove every firewall and traffic-shaping rule it added.
+It is safe to run when the hotspot is already stopped.
+.TP
+.B restart
+Run
+.B stop
+and then
+.BR start .
+Use it to apply changed settings.
+.SS Settings
+.TP
+.BI ssid " NAME"
+Set the network name.
+.TP
+.BI pass " PASSWORD"
+Set the Wi-Fi password: 8 to 63 characters, and it must not contain
+.RB \(dq | \(dq.
+.TP
+.BI max " N"
+Set the maximum number of connected devices.
+.TP
+.BR rate " [\fIMBIT\fR]"
+Set a download speed limit in Mbit/s shared by the whole hotspot.
+With no value, the limit is removed.
+.TP
+.BI security " MODE"
+Set the security mode:
+.B wpa2
+(the default, works with every device),
+.B wpa2wpa3
+(mixed mode), or
+.B wpa3
+(WPA3 only; older devices cannot connect).
+.SS Devices
+.I MAC
+is a device's hardware address, like
+.BR aa:bb:cc:dd:ee:ff .
+Upper or lower case is accepted.
+While the hotspot is running, changes take effect immediately.
+.TP
+.BI block " MAC"
+Add the device to the block list and disconnect it if it is connected.
+It is also removed from the approved list.
+.TP
+.BI unblock " MAC"
+Remove the device from the block list.
+.TP
+.BI allow " MAC"
+Add the device to the approved list (and remove it from the block list).
+The approved list only matters when approved-only mode
+.RB ( ALLOWLIST=1 )
+is on.
+.TP
+.BI disallow " MAC"
+Remove the device from the approved list.
+If approved-only mode is on, the device is disconnected.
+.TP
+.BI limit " MAC DOWN UP"
+Limit one device's download and upload speeds, in Mbit/s (0\(en1000).
+.B "limit"
+.I MAC
+.B "0 0"
+removes the limit.
+.SS Information
+.TP
+.B show
+Print the current settings as
+.IB KEY = VALUE
+lines, including the channel, the upstream interface and, while running,
+the total data used.
+It never prints the password.
+.TP
+.B clients
+Print one line per connected device, with these tab-separated fields:
+MAC, IP address, host name, bytes downloaded, bytes uploaded, download
+limit and upload limit.
+Prints nothing when the hotspot is off.
+.TP
+.B blocked
+Print the block list, one MAC address per line.
+.TP
+.B secret
+Print the Wi-Fi password.
+Requires root.
+.SS Internal commands
+These are used by the GUI and the installer.
+You normally don't need them.
+.TP
+.B apply \fISSID MAX RATE SECURITY ISOLATE ALLOWLIST IDLE_MIN CAP_MB NOTIFY \fR[\fISHOW_PANEL_ICON\fR]
+Check and save all settings at once, and restart the hotspot if it is
+running.
+A new password can be given as the first line of standard input; an
+empty line keeps the current one.
+.TP
+.B init
+Create the configuration files if they are missing and generate a random
+password.
+Existing settings are kept.
+.TP
+.B watch
+The background loop started by
+.BR start .
+It writes live statistics, enforces the idle timeout and data cap, and
+follows changes in the upstream Wi-Fi.
+.SH CONFIGURATION
+Settings are stored in
+.I /etc/hotspot.conf
+as
+.IB KEY = VALUE
+lines.
+.TP
+.B SSID
+Network name (1\(en32 bytes).
+The default is
+.IB hostname -Hotspot\fR.
+.TP
+.B MAXCLIENTS
+Maximum number of devices (1\(en32, default 8).
+.TP
+.B RATE
+Download limit for the whole hotspot, in Mbit/s; empty means no limit.
+.TP
+.B SECURITY
+.BR wpa2 " (default), " wpa2wpa3 " or " wpa3 .
+.TP
+.B ISOLATE
+If 1, connected devices cannot reach each other.
+.TP
+.B ALLOWLIST
+If 1, only devices on the approved list can connect (approved-only mode).
+.TP
+.B IDLE_MIN
+Turn off the hotspot after this many minutes with no devices connected (0 = never).
+.TP
+.B CAP_MB
+Turn off the hotspot after this many megabytes in total (0 = no limit).
+.TP
+.B NOTIFY
+If 1, show a desktop notification when devices join or leave.
+.TP
+.B SHOW_PANEL_ICON
+If 1, the GNOME Shell extension shows a panel icon.
+.PP
+These optional keys are detected automatically if not set:
+.TP
+.B STA
+The Wi-Fi interface connected to the internet, for example
+.BR wlan0 .
+.TP
+.B COUNTRY
+Two-letter regulatory country code, for example
+.BR IN .
+.TP
+.B SUBNET
+The first three parts of the hotspot's IPv4 subnet, for example
+.BR 192.168.50 .
+.SH FILES
+.TP
+.I /etc/hotspot.conf
+Settings (readable by everyone; it never contains the password).
+.TP
+.I /etc/hotspot.secret
+The Wi-Fi password (readable by root only).
+.TP
+.I /etc/hotspot.deny
+Blocked MAC addresses, one per line.
+.TP
+.I /etc/hotspot.allow
+Approved MAC addresses, one per line.
+.TP
+.I /etc/hotspot.limits
+Per-device speed limits, one
+.RI \(dq "MAC DOWN UP" \(dq
+line per device.
+.TP
+.I /run/hotspot-status
+Live statistics written by the watcher, readable by everyone.
+.TP
+.I /run/hotspot-hostapd.conf\fR, \fI/run/hotspot-hostapd.log
+The generated hostapd configuration and its log.
+.TP
+.I /etc/NetworkManager/conf.d/90-hotspot-ap0.conf
+Tells NetworkManager not to manage
+.BR ap0 .
+.TP
+.I /etc/sudoers.d/wifi-hotspot
+Lets the installing user run
+.BR "wifi-hotspot start" " and " "wifi-hotspot stop"
+without a password.
+.SH EXIT STATUS
+0 on success, and non-zero if a value is invalid, the command is not run
+as root when it needs to be, or the hotspot fails to start.
+.SH EXAMPLES
+Start the hotspot and show its password:
+.PP
+.RS
+.nf
+sudo wifi-hotspot start
+sudo wifi-hotspot secret
+.fi
+.RE
+.PP
+Change the name and password, then apply them:
+.PP
+.RS
+.nf
+sudo wifi-hotspot ssid "My Laptop"
+sudo wifi-hotspot pass "correct-horse-battery"
+sudo wifi-hotspot restart
+.fi
+.RE
+.PP
+Limit one device to 5 Mbit/s down and 2 Mbit/s up:
+.PP
+.RS
+.nf
+sudo wifi-hotspot limit aa:bb:cc:dd:ee:ff 5 2
+.fi
+.RE
+.PP
+List connected devices:
+.PP
+.RS
+.nf
+wifi-hotspot clients
+.fi
+.RE
+.SH NOTES
+The Wi-Fi card must support being a client and an access point at the same
+time.
+Check with:
+.PP
+.RS
+.nf
+iw list | grep -A8 'valid interface combinations'
+.fi
+.RE
+.PP
+The output should show both
+.B managed
+and
+.BR AP .
+.PP
+The distribution's own
+.B hostapd
+service is disabled during installation, because
+.B wifi-hotspot
+runs its own hostapd.
+.SH BUGS
+Only IPv4 is supported.
+An active Wi-Fi connection is required; Ethernet-only internet is not
+supported.
+Blocking by MAC address can be bypassed by devices that use random MAC
+addresses.
+.PP
+Report bugs at
+.UR https://github.com/SudarsanamR/wifi-hotspot/issues
+.UE .
+.SH AUTHOR
+Sudarsanam R <sudarsanam2006@gmail.com>
+.SH SEE ALSO
+.BR wifi-hotspot-gui (1),
+.BR hostapd (8),
+.BR dnsmasq (8),
+.BR iw (8),
+.BR iptables (8),
+.BR tc (8),
+.BR NetworkManager (8)

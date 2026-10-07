@@ -1,0 +1,73 @@
+.\" Man page for wifi-hotspot-gui.  View with:  man ./man/wifi-hotspot-gui.1
+.TH WIFI-HOTSPOT-GUI 1 "October 2026" "wifi-hotspot 1.1.2" "User Commands"
+.SH NAME
+wifi-hotspot-gui \- graphical control panel for the Wi-Fi hotspot
+.SH SYNOPSIS
+.B wifi-hotspot-gui
+.SH DESCRIPTION
+.B wifi-hotspot-gui
+is a GTK4/libadwaita app for controlling
+.BR wifi-hotspot (8).
+It can also be opened as
+.B "Wi-Fi Hotspot"
+from the application menu.
+.PP
+From the app you can:
+.IP \(bu 2
+turn the hotspot on and off;
+.IP \(bu 2
+change the network name, password, security mode, maximum number of
+devices and overall download limit;
+.IP \(bu 2
+show a QR code that phones can scan to connect (needs
+.BR python3-qrcode );
+.IP \(bu 2
+see each connected device's data usage and live speed;
+.IP \(bu 2
+limit a device's speed, block it, or add it to the approved list;
+.IP \(bu 2
+turn on device isolation, approved-only mode, an idle auto-off timer, a
+data cap, and join/leave notifications (needs
+.BR libnotify-bin ).
+.PP
+The app reads live status from
+.I /run/hotspot-status
+without root.
+Turning the hotspot on or off uses the passwordless
+.BR sudo (8)
+rule set up during installation.
+Changing settings, blocking devices or showing the password goes through
+.BR pkexec (1),
+so polkit asks for your password.
+.SH OPTIONS
+None.
+Standard GTK options are accepted.
+.SH FILES
+.TP
+.I /usr/share/applications/local.sudar.Hotspot.desktop
+The application menu entry.
+.TP
+.I /usr/share/polkit-1/actions/local.sudar.hotspot.policy
+The polkit action used for privileged changes.
+.TP
+.I /run/hotspot-status
+Live statistics written by the backend.
+.SH ENVIRONMENT
+Needs a graphical session (Wayland or X11) and Python 3 with PyGObject,
+GTK 4 and libadwaita 1.
+.SH NOTES
+On GNOME, a Quick Settings toggle is also installed as a GNOME Shell
+extension.
+On other desktops such as Cinnamon, MATE, XFCE or KDE, use this app or the
+.BR wifi-hotspot (8)
+command instead.
+.SH BUGS
+Report bugs at
+.UR https://github.com/SudarsanamR/wifi-hotspot/issues
+.UE .
+.SH AUTHOR
+Sudarsanam R <sudarsanam2006@gmail.com>
+.SH SEE ALSO
+.BR wifi-hotspot (8),
+.BR pkexec (1),
+.BR polkit (8)

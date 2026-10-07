@@ -47,6 +47,9 @@ install -d /usr/share/icons/hicolor/scalable/apps
 install -m 644 data/icons/wifi-hotspot.svg /usr/share/icons/hicolor/scalable/apps/wifi-hotspot.svg
 command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache /usr/share/icons/hicolor 2>/dev/null || true
 command -v update-desktop-database >/dev/null && update-desktop-database /usr/share/applications || true
+install -D -m 644 man/wifi-hotspot.8     /usr/local/share/man/man8/wifi-hotspot.8
+install -D -m 644 man/wifi-hotspot-gui.1 /usr/local/share/man/man1/wifi-hotspot-gui.1
+command -v mandb >/dev/null && mandb -q 2>/dev/null || true
 
 # NetworkManager must leave the virtual ap0 interface alone, or it fights hostapd for it
 if [ -d /etc/NetworkManager ]; then
